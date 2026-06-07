@@ -449,18 +449,27 @@ func listarProductos(c *gin.Context) {
 }
 
 func obtenerProducto(c *gin.Context) {
-	id := c.Param("id")
-	query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría') 
-              FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id WHERE p.id = ?`
+    id := c.Param("id")
 
-	var p Producto
-	err := db.QueryRow(query, id).Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Producto no encontrado"})
-		return
-	}
+    var p Producto
+    // incluir p.id_categoria en el SELECT
+    query := `
+        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') 
+        FROM productos p 
+        LEFT JOIN categorias c ON p.id_categoria = c.id 
+        WHERE p.id = ?`
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "data": p})
+    row := db.QueryRow(query, id)
+    
+    // pasar &p.IDCategoria en el mismo orden que el SELECT
+    err := row.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria)
+    
+    if err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Producto no encontrado"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"status": "success", "data": p})
 }
 
 func crearProducto(c *gin.Context) {
