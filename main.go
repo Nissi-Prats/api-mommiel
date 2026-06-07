@@ -403,28 +403,30 @@ func adminEliminarUsuario(c *gin.Context) {
 // =========================================================================
 
 func listarProductos(c *gin.Context) {
-	query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría') 
+    // Agregamos p.id_categoria a la consulta SQL
+    query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') 
               FROM productos p 
               LEFT JOIN categorias c ON p.id_categoria = c.id`
 
-	rows, err := db.Query(query)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar productos"})
-		return
-	}
-	defer rows.Close()
+    rows, err := db.Query(query)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar productos"})
+        return
+    }
+    defer rows.Close()
 
-	var productos []Producto = []Producto{} 
-	for rows.Next() {
-		var p Producto
-		if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer filas"})
-			return
-		}
-		productos = append(productos, p)
-	}
+    var productos []Producto = []Producto{} 
+    for rows.Next() {
+        var p Producto
+        // Agregamos &p.IDCategoria en el Scan en la misma posición de la consulta
+        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer filas"})
+            return
+        }
+        productos = append(productos, p)
+    }
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(productos), "data": productos})
+    c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(productos), "data": productos})
 }
 
 func obtenerProducto(c *gin.Context) {
