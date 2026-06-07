@@ -122,6 +122,7 @@ func main() {
 	r.GET("/api/productos", listarProductos)
 	r.GET("/api/productos/:id", obtenerProducto)
 	r.GET("/api/categorias", listarCategorias)
+	r.GET("/api/productos/populares", listarProductosPopulares)
 
 	// RUTAS PROTEGIDAS (Requieren Token JWT)
 	apiProtegida := r.Group("/api")
@@ -662,4 +663,48 @@ func listarMisPedidos(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "data": historial})
+}
+
+func listarProductosPopulares(c *gin.Context) {
+    // Esta consulta cuenta cuántas veces se ha vendido cada producto,
+    // hace un JOIN para traer sus datos y los ordena para darte el TOP 4.
+    query := `
+        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría')
+        FROM detalles_pedidos dp
+        JOIN productos p ON dp.id_producto = p.id
+        LEFT JOIN categorias c ON p.id_categoria = c.id
+        GROUP BY p.id
+        ORDER BY SUM(dp.cantidad) DESC
+        LIMIT 4`
+
+    rows, err := db.Query(query)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar populares"})
+        return
+    }
+    defer rows.Close()
+
+    var productos []Producto = []Producto{}
+    for rows.Next() {
+        var p Producto
+        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos"})
+            return
+        }
+        productos = append(productos, p)
+    }
+
+    // RESPALDO: Si tu tienda es nueva y no hay ventas aún, te devuelve 4 productos aleatorios para que no se vea vacío
+    if len(productos) == 0 {
+        queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría') FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id LIMIT 4`
+        rowsR, _ := db.Query(queryRespaldo)
+        defer rowsR.Close()
+        for rowsR.Next() {
+            var p Producto
+            rowsR.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria)
+            productos = append(productos, p)
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{"status": "success", "data": productos})
 }
