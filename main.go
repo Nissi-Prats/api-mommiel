@@ -22,12 +22,13 @@ var jwtKey = []byte("ClaveSecretaUltraSeguraDeMomMiel2026")
 // =========================================================================
 
 type Usuario struct {
-	ID            int       `json:"id"`
-	Nombre        string    `json:"nombre" binding:"required"`
-	Correo        string    `json:"correo" binding:"required"`
-	Contrasena    string    `json:"contrasena,omitempty" binding:"required"`
-	Rol           string    `json:"rol"`
-	FechaRegistro time.Time `json:"fecha_registro"`
+    ID            int       `json:"id"`
+    Nombre        string    `json:"nombre" binding:"required"`
+    Correo        string    `json:"correo" binding:"required"`
+    Contrasena    string    `json:"contrasena,omitempty" binding:"required"`
+    Rol           string    `json:"rol"`
+    Activo        int       `json:"activo"` 
+    FechaRegistro time.Time `json:"fecha_registro"`
 }
 
 type LoginInput struct {
@@ -128,9 +129,12 @@ func main() {
 	apiProtegida := r.Group("/api")
 	apiProtegida.Use(JWTMiddleware())
 	{
-		// Transacciones de Pedidos (Clientes)
+		// Gestión del propio Perfil (Clientes / Todos)
+    	apiProtegida.PUT("/usuarios/perfil", actualizarMiPerfil)
+		// Transacciones de Pedidos (Clientes) y (Admin)
 		apiProtegida.POST("/pedidos", crearPedido)
 		apiProtegida.GET("/pedidos", listarMisPedidos)
+		apiProtegida.PUT("/pedidos/:id/cancelar", cancelarPedidoLogico)
 
 		// Panel Administrativo - CRUD completo de Usuarios (Exclusivo Admin)
 		apiProtegida.POST("/admin/usuarios/crear", adminCrearUsuario)
@@ -142,6 +146,7 @@ func main() {
 		apiProtegida.POST("/productos", crearProducto)
 		apiProtegida.PUT("/productos/:id", actualizarProducto)
 		apiProtegida.DELETE("/productos/:id", eliminarProducto)
+		
 
 		// Panel Administrativo - CRUD de Categorías (Solo Admin)
 		apiProtegida.POST("/categorias", crearCategoria)
@@ -195,8 +200,8 @@ func loginUsuario(c *gin.Context) {
 	}
 
 	var u Usuario
-	err := db.QueryRow("SELECT id, nombre, correo, contrasena, rol FROM usuarios WHERE correo = ?", input.Correo).
-		Scan(&u.ID, &u.Nombre, &u.Correo, &u.Contrasena, &u.Rol)
+	err := db.QueryRow("SELECT id, nombre, correo, contrasena, rol FROM usuarios WHERE correo = ? AND activo = 1", input.Correo).
+    Scan(&u.ID, &u.Nombre, &u.Correo, &u.Contrasena, &u.Rol)
 
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Usuario o contraseña incorrectos"})
@@ -320,83 +325,91 @@ func adminCrearUsuario(c *gin.Context) {
 // =========================================================================
 
 func adminListarUsuarios(c *gin.Context) {
-	if rol, _ := c.Get("rol"); rol != "administrador" {
-		c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado: Se requieren permisos de administrador"})
-		return
-	}
+    if rol, _ := c.Get("rol"); rol != "administrador" {
+        c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado: Se requieren permisos de administrador"})
+        return
+    }
 
-	rows, err := db.Query("SELECT id, nombre, correo, rol, fecha_registro FROM usuarios ORDER BY fecha_registro DESC")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar usuarios"})
-		return
-	}
-	defer rows.Close()
+    // Añadimos u.activo a la consulta SQL
+    rows, err := db.Query("SELECT id, nombre, correo, rol, activo, fecha_registro FROM usuarios ORDER BY fecha_registro DESC")
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar usuarios"})
+        return
+    }
+    defer rows.Close()
 
-	var usuarios []Usuario = []Usuario{}
-	for rows.Next() {
-		var u Usuario
-		if err := rows.Scan(&u.ID, &u.Nombre, &u.Correo, &u.Rol, &u.FechaRegistro); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos de usuarios"})
-			return
-		}
-		usuarios = append(usuarios, u)
-	}
+    var usuarios []Usuario = []Usuario{}
+    for rows.Next() {
+        var u Usuario
+        // Agregamos &u.Activo en el Scan para recibir el valor (0 o 1)
+        if err := rows.Scan(&u.ID, &u.Nombre, &u.Correo, &u.Rol, &u.Activo, &u.FechaRegistro); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos de usuarios"})
+            return
+        }
+        usuarios = append(usuarios, u)
+    }
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(usuarios), "data": usuarios})
+    c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(usuarios), "data": usuarios})
 }
 
 func adminActualizarUsuario(c *gin.Context) {
-	if rol, _ := c.Get("rol"); rol != "administrador" {
-		c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
-		return
-	}
-	id := c.Param("id")
+    if rol, _ := c.Get("rol"); rol != "administrador" {
+        c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
+        return
+    }
+    id := c.Param("id")
 
-	var input struct {
-		Nombre string `json:"nombre" binding:"required"`
-		Correo string `json:"correo" binding:"required"`
-		Rol    string `json:"rol" binding:"required"`
-	}
+    // Añadimos 'Activo' a la estructura temporal que recibe los datos del Front
+    var input struct {
+        Nombre string `json:"nombre" binding:"required"`
+        Correo string `json:"correo" binding:"required"`
+        Rol    string `json:"rol" binding:"required"`
+        Activo *int   `json:"activo" binding:"required"` // Usamos puntero *int para que acepte el valor 0 de forma obligatoria
+    }
 
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Datos incorrectos o incompletos"})
-		return
-	}
+    if err := c.ShouldBindJSON(&input); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Datos incorrectos o incompletos"})
+        return
+    }
 
-	if input.Rol != "cliente" && input.Rol != "administrador" {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Rol inválido"})
-		return
-	}
+    if input.Rol != "cliente" && input.Rol != "administrador" {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Rol inválido"})
+        return
+    }
 
-	_, err := db.Exec("UPDATE usuarios SET nombre=?, correo=?, rol=? WHERE id=?", input.Nombre, input.Correo, input.Rol, id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al actualizar el usuario"})
-		return
-	}
+    // UPDATE modificado para incluir el estado 'activo'
+    query := "UPDATE usuarios SET nombre=?, correo=?, rol=?, activo=? WHERE id=?"
+    _, err := db.Exec(query, input.Nombre, input.Correo, input.Rol, *input.Activo, id)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al actualizar el usuario en la base de datos"})
+        return
+    }
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Usuario modificado exitosamente por el administrador"})
+    c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Usuario modificado y estado actualizado exitosamente por el administrador"})
 }
 
 func adminEliminarUsuario(c *gin.Context) {
-	if rol, _ := c.Get("rol"); rol != "administrador" {
-		c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
-		return
-	}
-	id := c.Param("id")
+    if rol, _ := c.Get("rol"); rol != "administrador" {
+        c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
+        return
+    }
+    id := c.Param("id")
 
-	adminIDID, _ := c.Get("usuario_id")
-	if fmt.Sprintf("%v", adminIDID) == id {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "No puedes eliminar tu propia cuenta de administrador"})
-		return
-	}
+    adminIDID, _ := c.Get("usuario_id")
+    if fmt.Sprintf("%v", adminIDID) == id {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "No puedes eliminar tu propia cuenta de administrador"})
+        return
+    }
 
-	_, err := db.Exec("DELETE FROM usuarios WHERE id = ?", id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo eliminar el usuario (verifica si tiene pedidos asociados)"})
-		return
-	}
+    // BORRADO LÓGICO: En lugar de DELETE, desactivamos al usuario cambiando 'activo' a 0
+    query := "UPDATE usuarios SET activo = 0 WHERE id = ?"
+    _, err := db.Exec(query, id)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo suspender al usuario en el sistema"})
+        return
+    }
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Usuario eliminado del sistema correctamente"})
+    c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Usuario dado de baja del sistema correctamente (Borrado Lógico)"})
 }
 
 // =========================================================================
@@ -667,7 +680,7 @@ func listarMisPedidos(c *gin.Context) {
 
 func listarProductosPopulares(c *gin.Context) {
     // Esta consulta cuenta cuántas veces se ha vendido cada producto,
-    // hace un JOIN para traer sus datos y los ordena para darte el TOP 4.
+    // hace un JOIN para traer sus datos y los ordena dando el TOP 4.
     query := `
         SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría')
         FROM detalles_pedidos dp
@@ -694,7 +707,7 @@ func listarProductosPopulares(c *gin.Context) {
         productos = append(productos, p)
     }
 
-    // RESPALDO: Si tu tienda es nueva y no hay ventas aún, te devuelve 4 productos aleatorios para que no se vea vacío
+    // RESPALDO: Si no hay ventas aún, te devuelve 4 productos aleatorios para que no se vea vacío
     if len(productos) == 0 {
         queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría') FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id LIMIT 4`
         rowsR, _ := db.Query(queryRespaldo)
@@ -707,4 +720,108 @@ func listarProductosPopulares(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, gin.H{"status": "success", "data": productos})
+}
+func cancelarPedidoLogico(c *gin.Context) {
+    pedidoID := c.Param("id")
+    usuarioID, _ := c.Get("usuario_id")
+    rol, _ := c.Get("rol")
+
+    // 1. Buscar el pedido en la BD para verificar a quién pertenece y su estado actual
+    var currentEstado string
+    var idDueno int
+    
+    queryCheck := "SELECT id_usuario, estado FROM pedidos WHERE id = ?"
+    err := db.QueryRow(queryCheck, pedidoID).Scan(&idDueno, &currentEstado)
+    
+    if err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "El pedido solicitado no existe en MomMiel"})
+        return
+    }
+
+    // 2. Control de accesos y reglas para Clientes normales (no admin)
+    if rol != "administrador" {
+        // No puedes cancelar un pedido que no sea tuyo
+        if idDueno != usuarioID {
+            c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado: Este pedido no pertenece a tu cuenta"})
+            return
+        }
+        
+        //  Si ya lo enviaste o entregaste, el cliente ya no puede cancelarlo desde la interfaz
+        if currentEstado != "procesado" {
+            c.JSON(http.StatusBadRequest, gin.H{
+                "status": "error", 
+                "message": fmt.Sprintf("No puedes cancelar este pedido porque su estado actual es '%s'", currentEstado),
+            })
+            return
+        }
+    }
+
+	// 3. BORRADO LÓGICO: Ejecutamos un UPDATE en lugar de un DELETE físico
+	queryUpdate := "UPDATE pedidos SET estado = 'cancelado' WHERE id = ?"
+	_, err = db.Exec(queryUpdate, pedidoID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error interno al intentar actualizar el estado en la base de datos"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": fmt.Sprintf("¡Pedido #%s cancelado correctamente de forma lógica!", pedidoID),
+	})
+}
+
+func actualizarMiPerfil(c *gin.Context) {
+    // 1. Obtener el ID del usuario autenticado desde el Token JWT
+    usuarioID, exists := c.Get("usuario_id")
+    if !exists {
+        c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Usuario no autenticado"})
+        return
+    }
+
+    // 2. Estructura para recibir los datos del Frontend
+    // La contraseña es opcional (por si solo quiere cambiar su nombre)
+    var input struct {
+        Nombre     string `json:"nombre" binding:"required"`
+        Contrasena string `json:"contrasena"` 
+    }
+
+    if err := c.ShouldBindJSON(&input); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "El campo nombre es obligatorio"})
+        return
+    }
+
+    // 3. Evaluar si el usuario decidió cambiar su contraseña o no
+    if input.Contrasena != "" {
+        // SI MANDÓ NUEVA CONTRASEÑA: La encriptamos y actualizamos ambos campos
+        if len(input.Contrasena) < 6 {
+            c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "La nueva contraseña debe tener al menos 6 caracteres"})
+            return
+        }
+
+        hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Contrasena), bcrypt.DefaultCost)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al procesar la nueva contraseña"})
+            return
+        }
+
+        query := "UPDATE usuarios SET nombre = ?, contrasena = ? WHERE id = ?"
+        _, err = db.Exec(query, input.Nombre, string(hashedPassword), usuarioID)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo actualizar el perfil"})
+            return
+        }
+    } else {
+        // NO MANDÓ CONTRASEÑA: Solo actualizamos el nombre para no borrar la clave actual
+        query := "UPDATE usuarios SET nombre = ? WHERE id = ?"
+        _, err := db.Exec(query, input.Nombre, usuarioID)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo actualizar el nombre"})
+            return
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "status":  "success",
+        "message": "¡Tu perfil en MomMiel ha sido actualizado correctamente!",
+    })
 }
