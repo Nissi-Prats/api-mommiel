@@ -691,14 +691,13 @@ func listarMisPedidos(c *gin.Context) {
 }
 
 func listarProductosPopulares(c *gin.Context) {
-    // Esta consulta cuenta cuántas veces se ha vendido cada producto,
-    // hace un JOIN para traer sus datos y los ordena dando el TOP 4.
+    //Se añade p.id_categoria al SELECT para que no devuelva 0
     query := `
-        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría')
+        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría')
         FROM detalles_pedidos dp
         JOIN productos p ON dp.id_producto = p.id
         LEFT JOIN categorias c ON p.id_categoria = c.id
-        GROUP BY p.id
+        GROUP BY p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, c.nombre_categoria
         ORDER BY SUM(dp.cantidad) DESC
         LIMIT 4`
 
@@ -712,21 +711,24 @@ func listarProductosPopulares(c *gin.Context) {
     var productos []Producto = []Producto{}
     for rows.Next() {
         var p Producto
-        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria); err != nil {
+        // Se añade &p.IDCategoria en el orden correcto del Scan
+        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria); err != nil {
             c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos"})
             return
         }
         productos = append(productos, p)
     }
 
-    // RESPALDO: Si no hay ventas aún, te devuelve 4 productos aleatorios para que no se vea vacío
+    // RESPALDO: Si no hay ventas aún, devuelve 4 productos aleatorios
     if len(productos) == 0 {
-        queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, COALESCE(c.nombre_categoria, 'Sin categoría') FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id LIMIT 4`
+        //También añadimos p.id_categoria en la consulta de respaldo
+        queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id LIMIT 4`
         rowsR, _ := db.Query(queryRespaldo)
         defer rowsR.Close()
         for rowsR.Next() {
             var p Producto
-            rowsR.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.NombreCategoria)
+            // 🎯 CORREGIDO: Se añade &p.IDCategoria en el Scan del respaldo
+            rowsR.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria)
             productos = append(productos, p)
         }
     }
