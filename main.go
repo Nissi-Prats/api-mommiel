@@ -59,8 +59,13 @@ type DetallePedidoInput struct {
 }
 
 type PedidoInput struct {
-	Total    float64              `json:"total" binding:"required"`
-	Detalles []DetallePedidoInput `json:"detalles" binding:"required"`
+    Total           float64              `json:"total" binding:"required"`
+    Direccion       string               `json:"direccion" binding:"required"`
+    Ciudad          string               `json:"ciudad" binding:"required"`
+    EstadoRepublica string               `json:"estado_republica" binding:"required"`
+    CodigoPostal    string               `json:"codigo_postal" binding:"required"`
+    Telefono        string               `json:"telefono" binding:"required"`
+    Detalles        []DetallePedidoInput `json:"detalles" binding:"required"`
 }
 
 type Claims struct {
@@ -601,50 +606,57 @@ func eliminarCategoria(c *gin.Context) {
 // =========================================================================
 
 func crearPedido(c *gin.Context) {
-	usuarioID, _ := c.Get("usuario_id") 
+    usuarioID, _ := c.Get("usuario_id") 
 
-	var input PedidoInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Datos de compra mal estructurados"})
-		return
-	}
+    var input PedidoInput
+    if err := c.ShouldBindJSON(&input); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Datos de compra o envío mal estructurados"})
+        return
+    }
 
-	tx, err := db.Begin()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error interno del sistema"})
-		return
-	}
+    tx, err := db.Begin()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error interno del sistema"})
+        return
+    }
 
-	res, err := tx.Exec("INSERT INTO pedidos (id_usuario, total, estado) VALUES (?, ?, 'procesado')", usuarioID, input.Total)
-	if err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al procesar orden general"})
-		return
-	}
+    // UPDATE SQL: Ahora incluimos los campos de envío en el INSERT
+    queryInsertPedido := `
+        INSERT INTO pedidos (id_usuario, direccion, ciudad, estado_republica, codigo_postal, telefono, total, estado) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'procesado')`
+        
+    res, err := tx.Exec(queryInsertPedido, 
+        usuarioID, input.Direccion, input.Ciudad, input.EstadoRepublica, input.CodigoPostal, input.Telefono, input.Total)
+        
+    if err != nil {
+        tx.Rollback()
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al procesar los datos de envío y orden general"})
+        return
+    }
 
-	pedidoID, err := res.LastInsertId()
-	if err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error de identificador"})
-		return
-	}
+    pedidoID, err := res.LastInsertId()
+    if err != nil {
+        tx.Rollback()
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error de identificador"})
+        return
+    }
 
-	for _, det := range input.Detalles {
-		_, err = tx.Exec("INSERT INTO detalles_pedidos (id_pedido, id_producto, cantidad, precio_unitario) VALUES (?, ?, ?, ?)",
-			pedidoID, det.IDProducto, det.Cantidad, det.PrecioUnitario)
-		if err != nil {
-			tx.Rollback() 
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al registrar artículos del carrito"})
-			return
-		}
-	}
+    for _, det := range input.Detalles {
+        _, err = tx.Exec("INSERT INTO detalles_pedidos (id_pedido, id_producto, cantidad, precio_unitario) VALUES (?, ?, ?, ?)",
+            pedidoID, det.IDProducto, det.Cantidad, det.PrecioUnitario)
+        if err != nil {
+            tx.Rollback() 
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al registrar artículos del carrito"})
+            return
+        }
+    }
 
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo consolidar la compra"})
-		return
-	}
+    if err := tx.Commit(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo consolidar la compra"})
+        return
+    }
 
-	c.JSON(http.StatusCreated, gin.H{"status": "success", "message": "¡Compra procesada con éxito en MomMiel! Tu pedido ya está en camino."})
+    c.JSON(http.StatusCreated, gin.H{"status": "success", "message": "¡Compra procesada con éxito en MomMiel! Tu pedido ya está registrado para envío."})
 }
 
 func listarMisPedidos(c *gin.Context) {
