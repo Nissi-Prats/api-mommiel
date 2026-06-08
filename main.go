@@ -170,6 +170,7 @@ func main() {
 		apiProtegida.POST("/productos", crearProducto)
 		apiProtegida.PUT("/productos/:id", actualizarProducto)
 		apiProtegida.DELETE("/productos/:id", eliminarProducto)
+		apiProtegida.POST("/productos/:id/activar", activarProducto)
 		
 
 		// Panel Administrativo - CRUD de Categorías (Solo Admin)
@@ -1067,4 +1068,20 @@ func cambiarEstadoPedidoAdmin(c *gin.Context) {
 		"message":      fmt.Sprintf("¡Pedido #%s actualizado con éxito a el estado: '%s'!", pedidoID, input.Estado),
 		"nuevo_estado": input.Estado,
 	})
+}
+func activarProducto(c *gin.Context) {
+    if rol, _ := c.Get("rol"); rol != "administrador" {
+        c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
+        return
+    }
+    id := c.Param("id")
+
+    // Operación inversa: Cambiamos el estado lógico a 1
+    _, err := db.Exec("UPDATE productos SET activo = 1 WHERE id = ?", id)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo reactivar el producto"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Producto reactivado en el catálogo con éxito"})
 }
