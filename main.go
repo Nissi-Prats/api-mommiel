@@ -74,6 +74,7 @@ type PedidoInput struct {
 type PedidoCompleto struct {
 	ID                 int             `json:"id"`
 	IDUsuario          int             `json:"id_usuario"`
+	NombreUsuario       string          `json:"nombre_usuario"`
 	Fecha              time.Time       `json:"fecha"`
 	Direccion          string          `json:"direccion"`
 	Ciudad             string          `json:"ciudad"`
