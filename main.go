@@ -40,6 +40,7 @@ type Categoria struct {
 	ID              int    `json:"id"`
 	NombreCategoria string `json:"nombre_categoria" binding:"required"`
 	EtapaEmbarazo   string `json:"etapa_embarazo" binding:"required"`
+	Activo          int    `json:"activo"`
 }
 
 type Producto struct {
@@ -50,6 +51,7 @@ type Producto struct {
 	Imagen          string  `json:"imagen" binding:"required"`
 	IDCategoria     int     `json:"id_categoria" binding:"required"`
 	NombreCategoria string  `json:"nombre_categoria"`
+	Activo       	int     `json:"activo"`
 }
 
 type DetallePedidoInput struct {
@@ -422,54 +424,55 @@ func adminEliminarUsuario(c *gin.Context) {
 // =========================================================================
 
 func listarProductos(c *gin.Context) {
-    // Agregamos p.id_categoria a la consulta SQL
-    query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') 
-              FROM productos p 
-              LEFT JOIN categorias c ON p.id_categoria = c.id`
+	// FILTRADO ACTIVADO: Agregamos p.activo al SELECT y filtramos con WHERE p.activo = 1
+	query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría'), p.activo 
+	          FROM productos p 
+	          LEFT JOIN categorias c ON p.id_categoria = c.id
+	          WHERE p.activo = 1`
 
-    rows, err := db.Query(query)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar productos"})
-        return
-    }
-    defer rows.Close()
+	rows, err := db.Query(query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar productos"})
+		return
+	}
+	defer rows.Close()
 
-    var productos []Producto = []Producto{} 
-    for rows.Next() {
-        var p Producto
-        // Agregamos &p.IDCategoria en el Scan en la misma posición de la consulta
-        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer filas"})
-            return
-        }
-        productos = append(productos, p)
-    }
+	var productos []Producto = []Producto{} 
+	for rows.Next() {
+		var p Producto
+		// Agregamos &p.Activo al final del Scan para que coincida exactamente con el SELECT
+		if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria, &p.Activo); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer filas"})
+			return
+		}
+		productos = append(productos, p)
+	}
 
-    c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(productos), "data": productos})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(productos), "data": productos})
 }
 
 func obtenerProducto(c *gin.Context) {
-    id := c.Param("id")
+	id := c.Param("id")
 
-    var p Producto
-    // incluir p.id_categoria en el SELECT
-    query := `
-        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') 
-        FROM productos p 
-        LEFT JOIN categorias c ON p.id_categoria = c.id 
-        WHERE p.id = ?`
+	var p Producto
+	//  Agregamos p.activo al SELECT por consistencia
+	query := `
+		SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría'), p.activo 
+		FROM productos p 
+		LEFT JOIN categorias c ON p.id_categoria = c.id 
+		WHERE p.id = ?`
 
-    row := db.QueryRow(query, id)
-    
-    // pasar &p.IDCategoria en el mismo orden que el SELECT
-    err := row.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria)
-    
-    if err != nil {
-        c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Producto no encontrado"})
-        return
-    }
+	row := db.QueryRow(query, id)
+	
+	// Agregamos &p.Activo al Scan
+	err := row.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria, &p.Activo)
+	
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "Producto no encontrado"})
+		return
+	}
 
-    c.JSON(http.StatusOK, gin.H{"status": "success", "data": p})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "data": p})
 }
 
 func crearProducto(c *gin.Context) {
@@ -484,6 +487,7 @@ func crearProducto(c *gin.Context) {
 		return
 	}
 
+	// Al insertar, dejamos que la BD use el DEFAULT 1 para 'activo'
 	_, err := db.Exec("INSERT INTO productos (nombre, precio, descripcion, imagen, id_categoria) VALUES (?, ?, ?, ?, ?)",
 		p.Nombre, p.Precio, p.Descripcion, p.Imagen, p.IDCategoria)
 	if err != nil {
@@ -524,13 +528,14 @@ func eliminarProducto(c *gin.Context) {
 	}
 	id := c.Param("id")
 
-	_, err := db.Exec("DELETE FROM productos WHERE id = ?", id)
+	//  EL TRUCO MÁGICO: Cambiamos DELETE por un UPDATE lógico
+	_, err := db.Exec("UPDATE productos SET activo = 0 WHERE id = ?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo eliminar"})
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo retirar el producto"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Producto retirado del catálogo"})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Producto retirado del catálogo con éxito"})
 }
 
 // =========================================================================
@@ -538,7 +543,10 @@ func eliminarProducto(c *gin.Context) {
 // =========================================================================
 
 func listarCategorias(c *gin.Context) {
-	rows, err := db.Query("SELECT id, nombre_categoria, etapa_embarazo FROM categorias")
+	//  FILTRADO ACTIVADO: Solo seleccionamos las categorías donde activo = 1
+	query := "SELECT id, nombre_categoria, etapa_embarazo, activo FROM categorias WHERE activo = 1"
+	
+	rows, err := db.Query(query)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error en servidor"})
 		return
@@ -548,7 +556,8 @@ func listarCategorias(c *gin.Context) {
 	var categorias []Categoria = []Categoria{}
 	for rows.Next() {
 		var cat Categoria
-		if err := rows.Scan(&cat.ID, &cat.NombreCategoria, &cat.EtapaEmbarazo); err != nil {
+		//  FILTRADO ACTIVADO: Solo seleccionamos las categorías donde activo = 1
+		if err := rows.Scan(&cat.ID, &cat.NombreCategoria, &cat.EtapaEmbarazo, &cat.Activo); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error de lectura"})
 			return
 		}
@@ -568,6 +577,7 @@ func crearCategoria(c *gin.Context) {
 		return
 	}
 
+	// Al insertar, dejamos que use el DEFAULT 1 de la BD
 	_, err := db.Exec("INSERT INTO categorias (nombre_categoria, etapa_embarazo) VALUES (?, ?)", cat.NombreCategoria, cat.EtapaEmbarazo)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al guardar"})
@@ -602,12 +612,14 @@ func eliminarCategoria(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
-	_, err := db.Exec("DELETE FROM categorias WHERE id = ?", id)
+
+	//  EL CAMBIO CLAVE: Cambiamos el DELETE físico por un UPDATE lógico
+	_, err := db.Exec("UPDATE categorias SET activo = 0 WHERE id = ?", id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo eliminar (verifica si tiene productos asociados)"})
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "No se pudo deshabilitar la categoría"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Categoría borrada"})
+	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Categoría retirada del catálogo con éxito"})
 }
 
 // =========================================================================
@@ -623,19 +635,60 @@ func crearPedido(c *gin.Context) {
         return
     }
 
+    if len(input.Detalles) == 0 {
+        c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "El carrito está vacío"})
+        return
+    }
+
     tx, err := db.Begin()
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error interno del sistema"})
         return
     }
 
-    // UPDATE SQL: Ahora incluimos los campos de envío en el INSERT
+    //  VALIDACIÓN Y CÁLCULO DE PRECIOS REALES DESDE EL BACKEND
+    var totalCalculado float64 = 0.0
+
+    type DetalleValidado struct {
+        IDProducto     int
+        Cantidad       int
+        PrecioUnitario float64
+    }
+    var detallesValidados []DetalleValidado
+
+    for _, det := range input.Detalles {
+        var precioReal float64
+        var activo int
+
+        // Buscamos el precio actual y el estado activo del producto
+        err := tx.QueryRow("SELECT precio, activo FROM productos WHERE id = ?", det.IDProducto).Scan(&precioReal, &activo)
+        
+        if err == sql.ErrNoRows || activo == 0 {
+            tx.Rollback()
+            c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Uno de los productos en tu carrito ya no está disponible"})
+            return
+        } else if err != nil {
+            tx.Rollback()
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al verificar el inventario"})
+            return
+        }
+
+        // Sumamos al total e introducimos el precio congelado en nuestra lista temporal
+        totalCalculado += precioReal * float64(det.Cantidad)
+        detallesValidados = append(detallesValidados, DetalleValidado{
+            IDProducto:     det.IDProducto,
+            Cantidad:       det.Cantidad,
+            PrecioUnitario: precioReal,
+        })
+    }
+
+    //  INSERT DEL PEDIDO: Reemplazamos 'input.Total' por el 'totalCalculado' por Go
     queryInsertPedido := `
         INSERT INTO pedidos (id_usuario, direccion, ciudad, estado_republica, codigo_postal, telefono, total, estado) 
         VALUES (?, ?, ?, ?, ?, ?, ?, 'procesado')`
         
     res, err := tx.Exec(queryInsertPedido, 
-        usuarioID, input.Direccion, input.Ciudad, input.EstadoRepublica, input.CodigoPostal, input.Telefono, input.Total)
+        usuarioID, input.Direccion, input.Ciudad, input.EstadoRepublica, input.CodigoPostal, input.Telefono, totalCalculado)
         
     if err != nil {
         tx.Rollback()
@@ -650,7 +703,8 @@ func crearPedido(c *gin.Context) {
         return
     }
 
-    for _, det := range input.Detalles {
+    //  INSERT DE DETALLES: Usamos los datos validados con los precios reales
+    for _, det := range detallesValidados {
         _, err = tx.Exec("INSERT INTO detalles_pedidos (id_pedido, id_producto, cantidad, precio_unitario) VALUES (?, ?, ?, ?)",
             pedidoID, det.IDProducto, det.Cantidad, det.PrecioUnitario)
         if err != nil {
@@ -700,13 +754,14 @@ func listarMisPedidos(c *gin.Context) {
 }
 
 func listarProductosPopulares(c *gin.Context) {
-    //Se añade p.id_categoria al SELECT para que no devuelva 0
+    //  Añadimos WHERE p.activo = 1 y p.activo al SELECT para el mapeo del Struct
     query := `
-        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría')
+        SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría'), p.activo
         FROM detalles_pedidos dp
         JOIN productos p ON dp.id_producto = p.id
         LEFT JOIN categorias c ON p.id_categoria = c.id
-        GROUP BY p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, c.nombre_categoria
+        WHERE p.activo = 1
+        GROUP BY p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, c.nombre_categoria, p.activo
         ORDER BY SUM(dp.cantidad) DESC
         LIMIT 4`
 
@@ -720,24 +775,36 @@ func listarProductosPopulares(c *gin.Context) {
     var productos []Producto = []Producto{}
     for rows.Next() {
         var p Producto
-        // Se añade &p.IDCategoria en el orden correcto del Scan
-        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos"})
+        //  Scan completo de 8 variables incluyendo &p.Activo
+        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria, &p.Activo); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer datos"})
             return
         }
         productos = append(productos, p)
     }
 
-    // RESPALDO: Si no hay ventas aún, devuelve 4 productos aleatorios
+    // RESPALDO: Si no hay ventas aún, devuelve 4 productos vigentes aleatorios
     if len(productos) == 0 {
-        //También añadimos p.id_categoria en la consulta de respaldo
-        queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría') FROM productos p LEFT JOIN categorias c ON p.id_categoria = c.id LIMIT 4`
-        rowsR, _ := db.Query(queryRespaldo)
+        //  Añadimos WHERE p.activo = 1 y p.activo al SELECT de respaldo
+        queryRespaldo := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría'), p.activo 
+                          FROM productos p 
+                          LEFT JOIN categorias c ON p.id_categoria = c.id 
+                          WHERE p.activo = 1 
+                          LIMIT 4`
+        rowsR, err := db.Query(queryRespaldo)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error en consulta de respaldo"})
+            return
+        }
         defer rowsR.Close()
+        
         for rowsR.Next() {
             var p Producto
-            // 🎯 CORREGIDO: Se añade &p.IDCategoria en el Scan del respaldo
-            rowsR.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria)
+            //  Scan completo de 8 variables para el respaldo
+            if err := rowsR.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria, &p.Activo); err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer respaldo"})
+                return
+            }
             productos = append(productos, p)
         }
     }
