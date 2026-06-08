@@ -74,7 +74,7 @@ type PedidoInput struct {
 type PedidoCompleto struct {
 	ID                 int             `json:"id"`
 	IDUsuario          int             `json:"id_usuario"`
-	NombreUsuario       string          `json:"nombre_usuario"`
+	NombreUsuario       string         `json:"nombre_usuario"`
 	Fecha              time.Time       `json:"fecha"`
 	Direccion          string          `json:"direccion"`
 	Ciudad             string          `json:"ciudad"`
@@ -937,54 +937,92 @@ func actualizarMiPerfil(c *gin.Context) {
     })
 }
 
-// [READ - ADMIN] Obtener todas las órdenes con los nombres reales de los productos
+// [READ - ADMIN] Obtener todas las órdenes con los nombres reales de los clientes y productos
 func listarTodosPedidos(c *gin.Context) {
-	// 1. Traemos la cabecera de todos los pedidos
-	queryPedidos := `SELECT id, id_usuario, fecha, direccion, ciudad, estado_republica, codigo_postal, telefono, total, estado, ultima_actualizacion 
-	                 FROM pedidos ORDER BY fecha DESC`
-	
-	rows, err := db.Query(queryPedidos)
-	if err != nil {
-		c.JSON(500, gin.H{"status": "error", "message": "Error al consultar pedidos globales"})
-		return
-	}
-	defer rows.Close()
+    // 1. Modificamos el SELECT para incluir un LEFT JOIN con la tabla de usuarios.
+    // Usamos COALESCE para que si el usuario no existe, devuelva un texto vacío en lugar de null.
+    queryPedidos := `
+        SELECT 
+            p.id, 
+            p.id_usuario, 
+            COALESCE(u.nombre, '') AS nombre_usuario, 
+            p.fecha, 
+            p.direccion, 
+            p.ciudad, 
+            p.estado_republica, 
+            p.codigo_postal, 
+            p.telefono, 
+            p.total, 
+            p.estado, 
+            p.ultima_actualizacion 
+        FROM pedidos p
+        LEFT JOIN usuarios u ON p.id_usuario = u.id
+        ORDER BY p.fecha DESC`
+    
+    rows, err := db.Query(queryPedidos)
+    if err != nil {
+        c.JSON(500, gin.H{"status": "error", "message": "Error al consultar pedidos globales"})
+        return
+    }
+    defer rows.Close()
 
-	var historialGlobal []PedidoCompleto = []PedidoCompleto{}
+    var historialGlobal []PedidoCompleto = []PedidoCompleto{}
 
-	for rows.Next() {
-		var p PedidoCompleto
-		err := rows.Scan(&p.ID, &p.IDUsuario, &p.Fecha, &p.Direccion, &p.Ciudad, &p.EstadoRepublica, &p.CodigoPostal, &p.Telefono, &p.Total, &p.Estado, &p.UltimaActualizacion)
-		if err != nil {
-			c.JSON(500, gin.H{"status": "error", "message": "Error al escanear pedidos"})
-			return
-		}
+    for rows.Next() {
+        var p PedidoCompleto
+        
+        // 2. Escaneamos respetando estrictamente el orden del SELECT. 
+        // &p.NombreUsuario ocupa la tercera posición.
+        err := rows.Scan(
+            &p.ID, 
+            &p.IDUsuario, 
+            &p.NombreUsuario, 
+            &p.Fecha, 
+            &p.Direccion, 
+            &p.Ciudad, 
+            &p.EstadoRepublica, 
+            &p.CodigoPostal, 
+            &p.Telefono, 
+            &p.Total, 
+            &p.Estado, 
+            &p.UltimaActualizacion,
+        )
+        if err != nil {
+            c.JSON(500, gin.H{"status": "error", "message": "Error al escanear pedidos"})
+            return
+        }
 
-		// Hacemos un JOIN con la tabla productos
-		// para traernos el 'nombre' aunque no viva en detalles_pedidos
-		queryDetalles := `
-			SELECT dp.id_producto, p.nombre, dp.cantidad, dp.precio_unitario 
-			FROM detalles_pedidos dp
-			JOIN productos p ON dp.id_producto = p.id
-			WHERE dp.id_pedido = ?`
+        // 3. Respaldo de Seguridad: Si el usuario fue eliminado o no existe en Render, 
+        // evitamos que quede vacío usando su ID de forma nativa sin romper el flujo.
+        if p.NombreUsuario == "" {
+            p.NombreUsuario = "Usuario #" + strconv.Itoa(p.IDUsuario)
+        }
 
-		rowsD, err := db.Query(queryDetalles, p.ID)
-		if err == nil {
-			var detalles []DetallePedidoInput = []DetallePedidoInput{}
-			for rowsD.Next() {
-				var d DetallePedidoInput
-				// Escaneamos p.nombre directo en d.NombreProducto
-				rowsD.Scan(&d.IDProducto, &d.NombreProducto, &d.Cantidad, &d.PrecioUnitario)
-				detalles = append(detalles, d)
-			}
-			rowsD.Close()
-			p.Detalles = detalles
-		}
+        // 4. Hacemos el JOIN con la tabla productos para traernos el detalle de los artículos compuestos
+        queryDetalles := `
+            SELECT dp.id_producto, p.nombre, dp.cantidad, dp.precio_unitario 
+            FROM detalles_pedidos dp
+            JOIN productos p ON dp.id_producto = p.id
+            WHERE dp.id_pedido = ?`
 
-		historialGlobal = append(historialGlobal, p)
-	}
+        rowsD, err := db.Query(queryDetalles, p.ID)
+        if err == nil {
+            var detalles []DetallePedidoInput = []DetallePedidoInput{}
+            for rowsD.Next() {
+                var d DetallePedidoInput
+                // Escaneamos p.nombre directo en d.NombreProducto
+                rowsD.Scan(&d.IDProducto, &d.NombreProducto, &d.Cantidad, &d.PrecioUnitario)
+                detalles = append(detalles, d)
+            }
+            rowsD.Close()
+            p.Detalles = detalles
+        }
 
-	c.JSON(200, gin.H{"status": "success", "data": historialGlobal})
+        historialGlobal = append(historialGlobal, p)
+    }
+
+    // 5. Retornamos la respuesta limpia y estructurada para el Frontend
+    c.JSON(200, gin.H{"status": "success", "data": historialGlobal})
 }
 
 // [PUT] /api/admin/pedidos/estado/:id
