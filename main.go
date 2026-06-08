@@ -57,7 +57,8 @@ type Producto struct {
 type DetallePedidoInput struct {
 	IDProducto     int     `json:"id_producto" binding:"required"`
 	Cantidad       int     `json:"cantidad" binding:"required"`
-	PrecioUnitario float64 `json:"precio_unitario" binding:"required"`
+	PrecioUnitario float64 `json:"precio_unitario"` //binding:"required"
+	NombreProducto string  `json:"nombre_producto"`
 }
 
 type PedidoInput struct {
@@ -68,6 +69,21 @@ type PedidoInput struct {
     CodigoPostal    string               `json:"codigo_postal" binding:"required"`
     Telefono        string               `json:"telefono" binding:"required"`
     Detalles        []DetallePedidoInput `json:"detalles" binding:"required"`
+}
+
+type PedidoCompleto struct {
+	ID                 int             `json:"id"`
+	IDUsuario          int             `json:"id_usuario"`
+	Fecha              time.Time       `json:"fecha"`
+	Direccion          string          `json:"direccion"`
+	Ciudad             string          `json:"ciudad"`
+	EstadoRepublica    string          `json:"estado_republica"`
+	CodigoPostal       string          `json:"codigo_postal"`
+	Telefono           string          `json:"telefono"`
+	Total              float64         `json:"total"`
+	Estado             string          `json:"estado"`
+	UltimaActualizacion time.Time      `json:"ultima_actualizacion"` 
+	Detalles           []DetallePedido `json:"detalles"`
 }
 
 type Claims struct {
@@ -159,6 +175,10 @@ func main() {
 		apiProtegida.POST("/categorias", crearCategoria)
 		apiProtegida.PUT("/categorias/:id", actualizarCategoria)
 		apiProtegida.DELETE("/categorias/:id", eliminarCategoria)
+
+		//  NUEVO: Control Logístico de Pedidos Globales (Solo Admin)
+        apiProtegida.GET("/admin/pedidos/global", listarTodosPedidos)// Ver historial de todas las mamás
+        apiProtegida.PUT("/admin/pedidos/estado/:id", cambiarEstadoPedidoAdmin)
 	}
 
 	r.Run(":8080")
@@ -914,4 +934,107 @@ func actualizarMiPerfil(c *gin.Context) {
         "status":  "success",
         "message": "¡Tu perfil en MomMiel ha sido actualizado correctamente!",
     })
+}
+
+// [READ - ADMIN] Obtener todas las órdenes con los nombres reales de los productos
+func listarTodosPedidos(c *gin.Context) {
+	// 1. Traemos la cabecera de todos los pedidos
+	queryPedidos := `SELECT id, id_usuario, fecha, direccion, ciudad, estado_republica, codigo_postal, telefono, total, estado, ultima_actualizacion 
+	                 FROM pedidos ORDER BY fecha DESC`
+	
+	rows, err := db.Query(queryPedidos)
+	if err != nil {
+		c.JSON(500, gin.H{"status": "error", "message": "Error al consultar pedidos globales"})
+		return
+	}
+	defer rows.Close()
+
+	var historialGlobal []PedidoCompleto = []PedidoCompleto{}
+
+	for rows.Next() {
+		var p PedidoCompleto
+		err := rows.Scan(&p.ID, &p.IDUsuario, &p.Fecha, &p.Direccion, &p.Ciudad, &p.EstadoRepublica, &p.CodigoPostal, &p.Telefono, &p.Total, &p.Estado, &p.UltimaActualizacion)
+		if err != nil {
+			c.JSON(500, gin.H{"status": "error", "message": "Error al escanear pedidos"})
+			return
+		}
+
+		// Hacemos un JOIN con la tabla productos
+		// para traernos el 'nombre' aunque no viva en detalles_pedidos
+		queryDetalles := `
+			SELECT dp.id_producto, p.nombre, dp.cantidad, dp.precio_unitario 
+			FROM detalles_pedidos dp
+			JOIN productos p ON dp.id_producto = p.id
+			WHERE dp.id_pedido = ?`
+
+		rowsD, err := db.Query(queryDetalles, p.ID)
+		if err == nil {
+			var detalles []DetallePedido = []DetallePedido{}
+			for rowsD.Next() {
+				var d DetallePedido
+				// Escaneamos p.nombre directo en d.NombreProducto
+				rowsD.Scan(&d.IDProducto, &d.NombreProducto, &d.Cantidad, &d.PrecioUnitario)
+				detalles = append(detalles, d)
+			}
+			rowsD.Close()
+			p.Detalles = detalles
+		}
+
+		historialGlobal = append(historialGlobal, p)
+	}
+
+	c.JSON(200, gin.H{"status": "success", "data": historialGlobal})
+}
+
+// [PUT] /api/admin/pedidos/estado/:id
+// Mueve el pedido a 'en camino', 'entregado' o 'cancelado' (Exclusivo Admin)
+func cambiarEstadoPedidoAdmin(c *gin.Context) {
+	// 1. Verificación de seguridad: Validamos que quien llame a la ruta sea un administrador
+	rol, _ := c.Get("rol")
+	if rol != "administrador" {
+		c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado: Se requieren permisos de administrador"})
+		return
+	}
+
+	// Capturamos el parámetro ID de la URL (ej. /estado/14)
+	pedidoID := c.Param("id")
+
+	// 2. Estructura local para mapear y validar el JSON recibido desde el frontend del Admin
+	var input struct {
+		Estado string `json:"estado" binding:"required"` // 'en camino', 'entregado', 'cancelado', etc.
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "El campo 'estado' es obligatorio"})
+		return
+	}
+
+	//  VALIDACIÓN DE SEGURIDAD: Comprobamos que el texto coincida de forma estricta con  opciones del ENUM
+	if input.Estado != "procesado" && input.Estado != "en camino" && input.Estado != "entregado" && input.Estado != "cancelado" {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "El estado proporcionado no es válido para la logística de MomMiel"})
+		return
+	}
+
+	// 3. Ejecutamos la actualización directa en la Base de Datos
+	//  Al usar "ON UPDATE CURRENT_TIMESTAMP" en  BD, MySQL actualizará la fecha sola al guardar el cambio.
+	query := "UPDATE pedidos SET estado = ? WHERE id = ?"
+	result, err := db.Exec(query, input.Estado, pedidoID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error interno al intentar actualizar el estado logístico"})
+		return
+	}
+
+	// 4. Verificación extra: Confirmamos si el pedido realmente existía en las tablas
+	filasAfectadas, _ := result.RowsAffected()
+	if filasAfectadas == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "El pedido solicitado no existe en la base de datos"})
+		return
+	}
+
+	// Respuesta exitosa
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "success",
+		"message":      fmt.Sprintf("¡Pedido #%s actualizado con éxito a el estado: '%s'!", pedidoID, input.Estado),
+		"nuevo_estado": input.Estado,
+	})
 }
