@@ -939,13 +939,13 @@ func actualizarMiPerfil(c *gin.Context) {
 
 // [READ - ADMIN] Obtener todas las órdenes con los nombres reales de los clientes y productos
 func listarTodosPedidos(c *gin.Context) {
-    // 1. Modificamos el SELECT para incluir un LEFT JOIN con la tabla de usuarios.
-    // Usamos COALESCE para que si el usuario no existe, devuelva un texto vacío en lugar de null.
+    // 1. Resolvemos el nombre directamente desde SQL. 
+    // Si no hay usuario, el mismo MySQL pegará la palabra "Usuario #X" automáticamente.
     queryPedidos := `
         SELECT 
             p.id, 
             p.id_usuario, 
-            COALESCE(u.nombre, '') AS nombre_usuario, 
+            COALESCE(u.nombre, CONCAT('Usuario #', p.id_usuario)) AS nombre_usuario, 
             p.fecha, 
             p.direccion, 
             p.ciudad, 
@@ -971,12 +971,11 @@ func listarTodosPedidos(c *gin.Context) {
     for rows.Next() {
         var p PedidoCompleto
         
-        // 2. Escaneamos respetando estrictamente el orden del SELECT. 
-        // &p.NombreUsuario ocupa la tercera posición.
+        // 2. Escaneamos respetando estrictamente el orden del SELECT.
         err := rows.Scan(
             &p.ID, 
             &p.IDUsuario, 
-            &p.NombreUsuario, 
+            &p.NombreUsuario, // 🎯 Tercera posición idéntica a u.nombre_usuario
             &p.Fecha, 
             &p.Direccion, 
             &p.Ciudad, 
@@ -992,13 +991,7 @@ func listarTodosPedidos(c *gin.Context) {
             return
         }
 
-        // 3. Respaldo de Seguridad: Si el usuario fue eliminado o no existe en Render, 
-        // evitamos que quede vacío usando su ID de forma nativa sin romper el flujo.
-        if p.NombreUsuario == "" {
-            p.NombreUsuario = "Usuario #" + strconv.Itoa(p.IDUsuario)
-        }
-
-        // 4. Hacemos el JOIN con la tabla productos para traernos el detalle de los artículos compuestos
+        // 3. Consultar los detalles de los productos compuestos
         queryDetalles := `
             SELECT dp.id_producto, p.nombre, dp.cantidad, dp.precio_unitario 
             FROM detalles_pedidos dp
@@ -1010,7 +1003,6 @@ func listarTodosPedidos(c *gin.Context) {
             var detalles []DetallePedidoInput = []DetallePedidoInput{}
             for rowsD.Next() {
                 var d DetallePedidoInput
-                // Escaneamos p.nombre directo en d.NombreProducto
                 rowsD.Scan(&d.IDProducto, &d.NombreProducto, &d.Cantidad, &d.PrecioUnitario)
                 detalles = append(detalles, d)
             }
@@ -1021,7 +1013,6 @@ func listarTodosPedidos(c *gin.Context) {
         historialGlobal = append(historialGlobal, p)
     }
 
-    // 5. Retornamos la respuesta limpia y estructurada para el Frontend
     c.JSON(200, gin.H{"status": "success", "data": historialGlobal})
 }
 
