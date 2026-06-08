@@ -171,8 +171,8 @@ func main() {
 		apiProtegida.PUT("/productos/:id", actualizarProducto)
 		apiProtegida.DELETE("/productos/:id", eliminarProducto)
 		apiProtegida.POST("/productos/:id/activar", activarProducto)
+		apiProtegida.GET("/productos-admin", listarProductosAdmin) // Listado completo de productos para Admin (incluye inactivos)
 		
-
 		// Panel Administrativo - CRUD de Categorías (Solo Admin)
 		apiProtegida.POST("/categorias", crearCategoria)
 		apiProtegida.PUT("/categorias/:id", actualizarCategoria)
@@ -1084,4 +1084,35 @@ func activarProducto(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Producto reactivado en el catálogo con éxito"})
+}
+
+func listarProductosAdmin(c *gin.Context) {
+    if rol, _ := c.Get("rol"); rol != "administrador" {
+        c.JSON(http.StatusForbidden, gin.H{"status": "error", "message": "Acceso denegado"})
+        return
+    }
+
+    //  QUERY SIN FILTRAR: Trae activos (1) e inactivos (0)
+    query := `SELECT p.id, p.nombre, p.precio, p.descripcion, p.imagen, p.id_categoria, COALESCE(c.nombre_categoria, 'Sin categoría'), p.activo 
+              FROM productos p 
+              LEFT JOIN categorias c ON p.id_categoria = c.id`
+
+    rows, err := db.Query(query)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al consultar productos globales"})
+        return
+    }
+    defer rows.Close()
+
+    var productos []Producto = []Producto{} 
+    for rows.Next() {
+        var p Producto
+        if err := rows.Scan(&p.ID, &p.Nombre, &p.Precio, &p.Descripcion, &p.Imagen, &p.IDCategoria, &p.NombreCategoria, &p.Activo); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "Error al leer filas"})
+            return
+        }
+        productos = append(productos, p)
+    }
+
+    c.JSON(http.StatusOK, gin.H{"status": "success", "count": len(productos), "data": productos})
 }
