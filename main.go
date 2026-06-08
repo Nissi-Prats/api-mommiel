@@ -83,7 +83,7 @@ type PedidoCompleto struct {
 	Total              float64         `json:"total"`
 	Estado             string          `json:"estado"`
 	UltimaActualizacion time.Time      `json:"ultima_actualizacion"` 
-	Detalles           []DetallePedido `json:"detalles"`
+	Detalles           []DetallePedidoInput `json:"detalles"`
 }
 
 type Claims struct {
@@ -969,9 +969,9 @@ func listarTodosPedidos(c *gin.Context) {
 
 		rowsD, err := db.Query(queryDetalles, p.ID)
 		if err == nil {
-			var detalles []DetallePedido = []DetallePedido{}
+			var detalles []DetallePedidoInput = []DetallePedidoInput{}
 			for rowsD.Next() {
-				var d DetallePedido
+				var d DetallePedidoInput
 				// Escaneamos p.nombre directo en d.NombreProducto
 				rowsD.Scan(&d.IDProducto, &d.NombreProducto, &d.Cantidad, &d.PrecioUnitario)
 				detalles = append(detalles, d)
