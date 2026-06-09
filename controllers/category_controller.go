@@ -33,7 +33,8 @@ func (cc *CategoryController) ListarCategorias(c *gin.Context) {
 			return
 		}
 		categorias = append(categorias, cat)
-	}c.JSON(http.StatusOK, gin.H{"status": "success", "data": categorias})
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "success", "data": categorias})
 }
 
 func (cc *CategoryController) CrearCategoria(c *gin.Context) {
