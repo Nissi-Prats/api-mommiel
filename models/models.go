@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
 
 type Usuario struct {
 	ID            int       `json:"id"`
@@ -66,4 +70,10 @@ type PedidoCompleto struct {
 	Estado              string               `json:"estado"`
 	UltimaActualizacion time.Time            `json:"ultima_actualizacion"` 
 	Detalles            []DetallePedidoInput `json:"detalles"`
+}
+
+type Claims struct {
+	UsuarioID int    `json:"id"`
+	Rol       string `json:"rol"`
+	jwt.RegisteredClaims
 }

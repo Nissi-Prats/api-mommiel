@@ -1,37 +1,27 @@
 package middlewares
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"mommiel-api/models"
 )
 
 var JwtKey = []byte("ClaveSecretaUltraSeguraDeMomMiel2026")
 
-func ValidarJWT() gin.HandlerFunc {
+func JWTMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Token requerido"})
+		if authHeader == "" || len(authHeader) < 8 {
+			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Falta el token de autorización o es inválido"})
 			c.Abort()
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Formato de token inválido (debe ser Bearer <token>)"})
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("método de firma inesperado: %v", token.Header["alg"])
-			}
+		tokenString := authHeader[7:]
+		claims := &models.Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			return JwtKey, nil
 		})
 
@@ -41,17 +31,8 @@ func ValidarJWT() gin.HandlerFunc {
 			return
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Error al mapear claims"})
-			c.Abort()
-			return
-		}
-
-		c.Set("id_usuario", int(claims["id_usuario"].(float64)))
-		c.Set("correo", claims["correo"].(string))
-		c.Set("rol", claims["rol"].(string))
-
+		c.Set("usuario_id", claims.UsuarioID)
+		c.Set("rol", claims.Rol)
 		c.Next()
 	}
 }

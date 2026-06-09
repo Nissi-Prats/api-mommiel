@@ -45,7 +45,7 @@ func (uc *UserController) LoginUsuario(c *gin.Context) {
 	}
 
 	tiempoExpiracion := time.Now().Add(24 * time.Hour)
-	claims := &middlewares.Claims{
+	claims := &models.Claims{
 		UsuarioID: u.ID,
 		Rol:       u.Rol,
 		RegisteredClaims: jwt.RegisteredClaims{
